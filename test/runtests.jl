@@ -1,5 +1,5 @@
 using Somoclu
-using Base.Test
+using Test
 
 import Somoclu: distance
 
@@ -14,18 +14,21 @@ function distance(p1::Ptr{Cfloat}, p2::Ptr{Cfloat}, d::Cuint)
     return sqrt(s)::Cfloat
 end
 
-function deterministic_codebook(useCustomDistance=false)
+function deterministic_codebook(useCustomDistance=false, usePCA=false)
     ncolumns, nrows = 2, 2
-    initialcodebook = Array{Float32}(zeros(2, ncolumns*nrows))
-    som = Som(ncolumns, nrows, initialcodebook=initialcodebook,
+    initialcodebook = zeros(Float32, 2, ncolumns*nrows)
+    som = Som(ncolumns, nrows,
+              initialization=usePCA ? "pca" : "random",
+              initialcodebook=initialcodebook,
               useCustomDistance=useCustomDistance)
     println("useCustomDistance: $(som.useCustomDistance)")
-    data = Array{Float32}([0.1 0.2; 0.3 0.4]);
-    train!(som, data);
-    correct_codebook = Array{Float32, 2}([0.15  0.126894  0.173106  0.15;
-                                          0.35  0.326894  0.373106  0.35]);
-    return sum(som.codebook - correct_codebook) < 10e-6
+    data = [0.1f0 0.2f0; 0.3f0 0.4f0]
+    train!(som, data)
+    correct_codebook = [0.15f0  0.126894f0 0.173106f0 0.15f0;
+                        0.35f0  0.326894f0 0.373106f0 0.35f0]
+    return sum(som.codebook - correct_codebook) < 10f-6
 end
 
 @test deterministic_codebook()
 @test deterministic_codebook(true)
+@test deterministic_codebook(false, true)

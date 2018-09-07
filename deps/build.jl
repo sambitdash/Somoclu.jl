@@ -6,13 +6,13 @@ somoclu_version="1.7.5"
 
 link = "https://github.com/peterwittek/somoclu/releases/download/$(somoclu_version)/somoclu-$(somoclu_version).tar.gz"
 
-if !is_windows()
+if !Sys.iswindows()
 	libsomoclu = library_dependency("libsomoclu",
 								 aliases=["libsomoclu", "libsomoclu.so"], os=:Unix)
 	provides(Sources, Dict([URI(link) => libsomoclu]))
 	provides(BuildProcess,
 			 Autotools(libtarget=joinpath("src", "libsomoclu.so"),
-			           configure_options=[AbstractString("--without-mpi")]), libsomoclu, os=:Unix)
+			           configure_options=[String("--without-mpi")]), libsomoclu, os=:Unix)
 	@BinDeps.install Dict([:libsomoclu => :libsomoclu])
 else
     using WinRPM

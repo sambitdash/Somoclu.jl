@@ -4,8 +4,8 @@ module Somoclu
 
 using BinDeps
 using MultivariateStats: PCA, fit, principalvars, projection
-using Base: AsyncCondition
-
+using Statistics: mean
+using LinearAlgebra: norm
 export Som, train!, distance
 
 if isfile(joinpath(dirname(@__FILE__),"..","deps","deps.jl"))
@@ -14,6 +14,7 @@ else
     error("Somoclu not properly installed. Please run Pkg.build(\"Somoclu\")")
 end
 
+#=
 """
     Som(ncolumns, nrows; <keyword arguments>)
 
@@ -36,6 +37,7 @@ Self-organizing map of size `ncolumns`x`nrows`.
                            exp(-||x-y||^2/(2\*(coeff\*radius)^2))
 * `verbose::Integer=0p`: Specify verbosity: 0, 1, or 2.
 """
+=#
 mutable struct Som
     ncolumns::Int
     nrows::Int
@@ -83,18 +85,18 @@ end
 
 distance(p1::Ptr{Cfloat}, p2::Ptr{Cfloat}, d::Cuint) = Cfloat(0.0)::Cfloat
 
-function get_parameters(context::Ptr{Void})
+function get_parameters(context::Ptr{Nothing})
     pr = Ptr{Cfloat}(context)::Ptr{Cfloat}
     dim = unsafe_load(Ptr{Cuint}(context + Core.sizeof(Cfloat)))::Cuint
     p1a = Ptr{Ptr{Cfloat}}(pr + Core.sizeof(Cfloat) + Core.sizeof(Cuint))::Ptr{Ptr{Cfloat}}
     p2a = (p1a + Core.sizeof(Ptr{Cfloat}))::Ptr{Ptr{Cfloat}}
     p1 = unsafe_load(p1a)
     p2 = unsafe_load(p2a)
-    rem = Ptr{Void}(p2a + Core.sizeof(Ptr{Cfloat}))::Ptr{Void}
+    rem = Ptr{Nothing}(p2a + Core.sizeof(Ptr{Cfloat}))::Ptr{Nothing}
     return dim, p1, p2, pr, rem
 end
 
-function nothreads_distance(context::Ptr{Void})
+function nothreads_distance(context::Ptr{Nothing})
     dim, p1, p2, pr, ignore = get_parameters(context)
     r = distance(p1, p2, dim)
     unsafe_store!(pr, r)
@@ -102,8 +104,8 @@ function nothreads_distance(context::Ptr{Void})
 end
 
 function __init__()
-    global const fdist_nt_c = cfunction(nothreads_distance, Cfloat, (Ptr{Void}, ))
-    global mt_data_map = Dict{AsyncCondition, Ref{Ptr{Void}}}()
+    global fdist_nt_c = @cfunction(nothreads_distance, Cfloat, (Ptr{Nothing}, ))
+    global mt_data_map = Dict{Base.AsyncCondition, Ref{Ptr{Nothing}}}()
 end
 
 """
@@ -131,7 +133,7 @@ The som will be updated during training.
 function train!(som::Som, data::Array{Float32, 2}; epochs=10, radius0=0, radiusN=1, radiuscooling="linear", scale0=0.1, scaleN=0.01, scalecooling="linear")
     nDimensions, nVectors = size(data)
     if som.initialization == "random"
-        som.codebook = Array{Float32}(nDimensions, som.ncolumns*som.nrows);
+        som.codebook = Matrix{Float32}(undef, nDimensions, som.ncolumns*som.nrows);
         # These two lines trigger the C++ code to randomly initialize the codebook
         som.codebook[1, 1] = 1000.0
         som.codebook[2, 1] = 2000.0
@@ -142,12 +144,16 @@ function train!(som::Som, data::Array{Float32, 2}; epochs=10, radius0=0, radiusN
             coord[i, 2] = rem(i-1, som.ncolumns)
         end
         coord = coord ./ [som.nrows-1 som.ncolumns-1];
-        coord = 2*(coord - .5);
-        me = mean(data, 2);
-        M = fit(PCA, data.-me; maxoutdim=2);
+        coord = 2*(coord .- .5);
+        me = mean(data, dims=2)
+        M = fit(PCA, data .- me; maxoutdim=2);
         eigval = principalvars(M);
         eigvec = projection(M);
-        norms = [norm(eigvec[:, i]) for i in 1:2];
+        if size(eigvec)[2] == 1
+            norms = copy(eigvec)
+        else
+            norms = [norm(eigvec[:, i]) for i in 1:2]
+        end
         eigvec = ((eigvec' ./ norms) .* eigval)'
         som.codebook = repeat(me, outer=[1, som.ncolumns*som.nrows])
         for j = 1:som.ncolumns*som.nrows
@@ -174,18 +180,18 @@ function train!(som::Som, data::Array{Float32, 2}; epochs=10, radius0=0, radiusN
                      som.gridtype == "hexagonal"    ? 1 :
                      error("Unknown grid type!")
 
-    bmus = Array{Cint}(nVectors*2);
-    umatrix = Array{Float32}(som.ncolumns*som.nrows);
+    bmus = Vector{Cint}(undef, nVectors*2);
+    umatrix = Vector{Float32}(undef, som.ncolumns*som.nrows);
 
     global fdist_nt_c
 
     fp = !som.useCustomDistance ? C_NULL : fdist_nt_c
 
     # Note that som.ncolumns and som.nrows are swapped because Julia is column-first
-    ccall((:julia_train, libsomoclu), Void,
+    ccall((:julia_train, libsomoclu), Nothing,
           (Ptr{Float32}, Cint, Cuint, Cuint, Cuint, Cuint, Cuint, Float32, Float32, Cuint,
            Float32, Float32, Cuint, Cuint, Cuint, Cuint, Bool, Bool, Float32, Cuint,
-           Ptr{Float32}, Cint, Ptr{Cint}, Cint, Ptr{Float32}, Cint, Ptr{Void}),
+           Ptr{Float32}, Cint, Ptr{Cint}, Cint, Ptr{Float32}, Cint, Ptr{Nothing}),
           reshape(data, length(data)), length(data), epochs, som.nrows, som.ncolumns,
           nDimensions, nVectors, radius0, radiusN, _radiuscooling, scale0, scaleN,
           _scalecooling, som.kerneltype, _maptype, _gridtype, som.compactsupport,
@@ -195,7 +201,7 @@ function train!(som::Som, data::Array{Float32, 2}; epochs=10, radius0=0, radiusN
 
     som.umatrix = reshape(umatrix, som.nrows, som.ncolumns);
     som.bmus = reshape(bmus, 2, nVectors)
-    som.bmus[1, :], som.bmus[2, :] = som.bmus[2, :]+1, som.bmus[1, :]+1;
+    som.bmus[1, :], som.bmus[2, :] = som.bmus[2, :] .+ 1, som.bmus[1, :] .+ 1
     return nothing
 end
 
