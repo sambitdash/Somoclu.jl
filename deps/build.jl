@@ -17,7 +17,7 @@ if !Sys.iswindows()
 else
     using WinRPM
 	using Base.Filesystem
-	using Base.Libdl
+	using Libdl
 
 	WinRPM.install("gcc", yes=true)
 	WinRPM.install("binutils", yes=true)
